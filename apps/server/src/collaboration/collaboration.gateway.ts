@@ -84,26 +84,45 @@ export class CollaborationGateway {
   ): Promise<void> {
     this.logger.debug(`Replacing content for ${documentName}`);
     
-    const connection = await this.hocuspocus.openDirectConnection(documentName);
-    try {
-      await connection.transact((doc: Document) => {
-        const fragment = doc.getXmlFragment('default');
-        
-        // Clear existing content
-        if (fragment.length > 0) {
-          fragment.delete(0, fragment.length);
+    // Retry logic: first attempt may fail if document is being loaded for the first time
+    const maxRetries = 2;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const connection = await this.hocuspocus.openDirectConnection(documentName);
+        try {
+          await connection.transact((doc: Document) => {
+            const fragment = doc.getXmlFragment('default');
+            
+            // Clear existing content
+            if (fragment.length > 0) {
+              fragment.delete(0, fragment.length);
+            }
+            
+            // Create new Y.js doc from ProseMirror JSON and apply update
+            const newDoc = TiptapTransformer.toYdoc(
+              prosemirrorJson,
+              'default',
+              tiptapExtensions,
+            );
+            Y.applyUpdate(doc, Y.encodeStateAsUpdate(newDoc));
+          });
+          return; // Success
+        } finally {
+          await connection.disconnect();
         }
-        
-        // Create new Y.js doc from ProseMirror JSON and apply update
-        const newDoc = TiptapTransformer.toYdoc(
-          prosemirrorJson,
-          'default',
-          tiptapExtensions,
-        );
-        Y.applyUpdate(doc, Y.encodeStateAsUpdate(newDoc));
-      });
-    } finally {
-      await connection.disconnect();
+      } catch (error) {
+        lastError = error as Error;
+        this.logger.warn(`Attempt ${attempt} failed for ${documentName}: ${lastError.message}`);
+        if (attempt < maxRetries) {
+          // Small delay before retry
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
     }
+    
+    // All retries failed
+    throw lastError;
   }
 }
