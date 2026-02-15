@@ -6,7 +6,9 @@ interface MathInlineToken {
   raw: string;
 }
 
-const inlineMathRegex = /^\$(?!\s)(.+?)(?<!\s)\$(?!\d)/;
+// Safari <16.4 doesn't support lookbehind assertions (?<!\s), so we use a simpler
+// regex and validate trailing whitespace in the tokenizer instead
+const inlineMathRegex = /^\$(?!\s)(.+?)\$(?!\d)/;
 
 export const mathInlineExtension = {
   name: 'mathInline',
@@ -34,11 +36,12 @@ export const mathInlineExtension = {
   tokenizer(src: string): MathInlineToken | undefined {
     const match = inlineMathRegex.exec(src);
 
-    if (match) {
+    // Reject if content ends with whitespace (replaces lookbehind assertion for Safari <16.4 compatibility)
+    if (match && match[1] && !/\s$/.test(match[1])) {
       return {
         type: 'mathInline',
         raw: match[0],
-        text: match[1]?.trim(),
+        text: match[1].trim(),
       };
     }
   },
